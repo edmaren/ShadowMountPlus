@@ -51,8 +51,8 @@
 # recursive_scan=0
 
 # Full scan loop interval (seconds), range: 1..3600
-# Default: 60
-# scan_interval_seconds=60
+# Default: 15
+# scan_interval_seconds=15
 
 # Source stabilization wait window (seconds), range: 0..3600
 # If source mtime/ctime is newer than this window, it will be deferred to next scan.
