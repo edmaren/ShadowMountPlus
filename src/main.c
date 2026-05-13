@@ -17,6 +17,7 @@
 #include "sm_path_utils.h"
 #include "sm_scan.h"
 #include "sm_scanner.h"
+#include "sm_time.h"
 #include "sm_install.h"
 #include "sm_appdb.h"
 #include "sm_limits.h"
@@ -32,6 +33,7 @@
 #define BACKPORK_PROCESS_NAME_ALT "ps5-backpork.elf"
 #define RESTART_WAIT_POLL_US 200000u
 #define RESTART_WAIT_MAX_US 60000000u
+#define STOP_FILE_POLL_INTERVAL_US 3000000ull
 #define KINFO_PID_OFFSET 72
 #define KINFO_TDNAME_OFFSET 447
 
@@ -43,6 +45,7 @@ static volatile sig_atomic_t g_stop_requested = 0;
 static atomic_bool g_shutdown_on_going_stop_requested = false;
 static atomic_bool g_runtime_sleep_mode_active = false;
 static _Atomic(uintptr_t) g_shutdown_stop_reason_bits = 0;
+static atomic_uint_fast64_t g_next_stop_file_poll_us = 0;
 static pthread_mutex_t g_runtime_mount_state_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 typedef struct {
@@ -79,8 +82,20 @@ void install_signal_handlers(void) {
 bool should_stop_requested(void) {
   if (g_stop_requested)
     return true;
-  if (path_exists(KILL_FILE)) {
-    remove(KILL_FILE);
+
+  uint64_t now_us = monotonic_time_us();
+  if (now_us != 0) {
+    uint64_t next_poll_us =
+        atomic_load_explicit(&g_next_stop_file_poll_us, memory_order_acquire);
+    if (next_poll_us != 0 && now_us < next_poll_us)
+      return false;
+    atomic_store_explicit(&g_next_stop_file_poll_us,
+                          now_us + STOP_FILE_POLL_INTERVAL_US,
+                          memory_order_release);
+  }
+
+  if (remove(KILL_FILE) == 0) {
+    g_stop_requested = 1;
     return true;
   }
   return false;
