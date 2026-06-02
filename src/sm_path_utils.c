@@ -20,6 +20,10 @@ bool is_under_image_mount_base(const char *path) {
           path[image_prefix_len] == '/');
 }
 
+bool is_pfsc_image_mount_base_or_child(const char *path) {
+  return path_matches_root_or_child(path, PFSC_IMAGE_MOUNT_BASE);
+}
+
 bool path_matches_root_or_child(const char *path, const char *root) {
   if (!path || !root || root[0] == '\0')
     return false;

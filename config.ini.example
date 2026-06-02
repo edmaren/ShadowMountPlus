@@ -120,7 +120,7 @@
 
 # Optional custom scan roots (can be repeated):
 # If at least one scanpath=... is present, only these paths are used.
-# "/mnt/shadowmnt" is always added automatically.
+# "/mnt/shadowmnt/pfsc" and "/mnt/shadowmnt" are always added automatically.
 # Default: use built-in scan path list
 # scanpath=/data/homebrew
 

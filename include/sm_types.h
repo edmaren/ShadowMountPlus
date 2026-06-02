@@ -138,6 +138,7 @@ typedef enum {
   IMAGE_FS_UFS,
   IMAGE_FS_EXFAT,
   IMAGE_FS_PFS,
+  IMAGE_FS_PFSC_CONTAINER,
 } image_fs_type_t;
 
 typedef struct sm_error {

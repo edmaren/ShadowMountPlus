@@ -2,6 +2,7 @@
 #define SM_PATHS_H
 
 #define IMAGE_MOUNT_BASE "/mnt/shadowmnt"
+#define PFSC_IMAGE_MOUNT_BASE "/mnt/shadowmnt/pfsc"
 
 #define DEFAULT_BACKPORTS_DIR_NAME "backports"
 #define DEFAULT_GLOBAL_FAKELIB_PATH "/data/shadowmount/fakelib"

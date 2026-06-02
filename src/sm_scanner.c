@@ -637,9 +637,7 @@ static bool rebuild_scan_root_watch_tree(int kq, int scan_root_index) {
     return true;
   }
 
-  unsigned int scan_depth = runtime_config()->scan_depth;
-  if (scan_depth < MIN_SCAN_DEPTH)
-    scan_depth = MIN_SCAN_DEPTH;
+  unsigned int scan_depth = get_scan_depth_for_root(scan_root);
 
   register_watch_tree_ctx_t walk_ctx = {
       .kq = kq,
@@ -692,9 +690,7 @@ static bool rebuild_scan_root_watch_subtree(int kq, int scan_root_index,
     return true;
   }
 
-  unsigned int scan_depth = runtime_config()->scan_depth;
-  if (scan_depth < MIN_SCAN_DEPTH)
-    scan_depth = MIN_SCAN_DEPTH;
+  unsigned int scan_depth = get_scan_depth_for_root(scan_root);
 
   if (!remove_scan_root_watch_entries_for_path(scan_root_index, rebuild_path))
     return false;
@@ -782,7 +778,8 @@ static bool scanner_event_requires_watch_tree_refresh(
   case SCANNER_WATCH_SCAN_BACKPORT_ROOT:
     return (fflags & (NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE)) != 0;
   case SCANNER_WATCH_SCAN_SUBDIR:
-    return entry->depth < runtime_config()->scan_depth &&
+    return entry->depth <
+               get_scan_depth_for_root(get_scan_path(entry->scan_root_index)) &&
            (fflags & tree_change_flags) != 0;
   case SCANNER_WATCH_SCAN_IMAGE_FILE:
     return (fflags & (NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE)) != 0;

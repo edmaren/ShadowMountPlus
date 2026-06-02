@@ -12,6 +12,8 @@ const char *get_filename_component(const char *path);
 bool path_exists(const char *path);
 // Return true when a path lives under the image mount root.
 bool is_under_image_mount_base(const char *path);
+// Return true when a path is the PFSC container mount root or lives under it.
+bool is_pfsc_image_mount_base_or_child(const char *path);
 // Return true when path is equal to root or is under it.
 bool path_matches_root_or_child(const char *path, const char *root);
 // Return true when a path lives on USB-backed storage.

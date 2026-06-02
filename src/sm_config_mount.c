@@ -224,11 +224,16 @@ static bool add_runtime_scan_path(runtime_config_state_t *state,
   return true;
 }
 
+static void add_runtime_managed_scan_paths(runtime_config_state_t *state) {
+  (void)add_runtime_scan_path(state, PFSC_IMAGE_MOUNT_BASE);
+  (void)add_runtime_scan_path(state, IMAGE_MOUNT_BASE);
+}
+
 static void init_runtime_scan_paths_defaults(runtime_config_state_t *state) {
   clear_runtime_scan_paths(state);
   for (int i = 0; k_default_scan_paths[i] != NULL; i++)
     (void)add_runtime_scan_path(state, k_default_scan_paths[i]);
-  (void)add_runtime_scan_path(state, IMAGE_MOUNT_BASE);
+  add_runtime_managed_scan_paths(state);
 }
 
 static void clear_kstuff_title_rules(runtime_config_state_t *state) {
@@ -351,6 +356,15 @@ const char *get_scan_path(int index) {
   if (index < 0 || index >= state->scan_path_count)
     return NULL;
   return state->scan_path_storage[index];
+}
+
+uint32_t get_scan_depth_for_root(const char *scan_path) {
+  uint32_t scan_depth = runtime_config()->scan_depth;
+  if (scan_depth < MIN_SCAN_DEPTH)
+    scan_depth = MIN_SCAN_DEPTH;
+  if (is_pfsc_image_mount_base_or_child(scan_path))
+    scan_depth++;
+  return scan_depth;
 }
 
 bool get_image_mode_override(const char *filename, bool *mount_read_only_out) {
@@ -1446,9 +1460,8 @@ static config_load_status_t load_runtime_config_state(runtime_config_state_t *st
   if (has_custom_scanpaths && state->scan_path_count == 0) {
     log_debug("  [CFG] no valid scanpath entries, using defaults");
     init_runtime_scan_paths_defaults(state);
-  } else {
-    (void)add_runtime_scan_path(state, IMAGE_MOUNT_BASE);
   }
+  add_runtime_managed_scan_paths(state);
 
   if (legacy_recursive_scan_requested) {
     state->cfg.scan_depth = 2u;

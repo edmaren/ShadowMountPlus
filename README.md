@@ -32,6 +32,7 @@
 | `.ffpkg` | `ufs` | `LVD` or `MD` (configurable) | Recommended |
 | `.exfat` | `exfatfs` | `LVD` or `MD` (configurable) | Compatibility / external-drive-only titles |
 | `.ffpfs` | `pfs` | `LVD` | Experimental |
+| `.ffpfsc` | `pfs` container | `LVD` | Experimental container for nested images |
 
 Notes:
 - Backend, read-only mode, and sector size can be configured via `/data/shadowmount/config.ini`.
@@ -109,7 +110,7 @@ Per-image sector override behavior:
 
 Scan path behavior:
 - If at least one `scanpath=...` is present, only those custom paths are used.
-- `/mnt/shadowmnt` is always added automatically, even with custom paths.
+- `/mnt/shadowmnt/pfsc` and `/mnt/shadowmnt` are always added automatically, even with custom paths.
 - With `scan_depth=1` (default), only first-level subfolders are checked.
 - With `scan_depth=2`, one additional nested level is checked.
 - If `recursive_scan=1` is set, ShadowMount+ forces `scan_depth=2`.
@@ -160,11 +161,21 @@ Image mountpoints are created under:
 
 `/mnt/shadowmnt/<image_name>_<hash>`
 
+PFSC container mountpoints are created under:
+
+`/mnt/shadowmnt/pfsc/<image_name>_<hash>`
+
 Image layout requirement (`.ffpkg`, `.exfat`, `.ffpfs`):
 - Game files must be placed at the image root.
 - Do not add an extra top-level folder inside the image.
 - Valid example: `/sce_sys/param.json` exists directly from image root.
 - Invalid example: `/GAME_FOLDER/sce_sys/param.json` (extra nesting level).
+
+PFSC container layout requirement (`.ffpfsc`):
+- Do not place game files directly in the container root.
+- Place supported nested image files inside the container; ShadowMountPlus mounts those nested images and scans them for the game.
+- A nested `pfs_image.dat` file inside a PFSC container is treated as a PFS image.
+- `.ffpfsc` uses the nested outer PFS profile (`img_type=0x02`); `.ffpfs` and `pfs_image.dat` files mounted from inside it use the nested inner profile (`img_type=0x82`). Signature verification and GDDR5 cache setup are kept in code but currently disabled.
 
 ## Scan paths
 
@@ -180,6 +191,7 @@ Default scan locations:
 - `/mnt/usb0` .. `/mnt/usb7`
 - `/mnt/ext0`
 - `/mnt/ext1`
+- `/mnt/shadowmnt/pfsc` (mounted PFSC container scan)
 - `/mnt/shadowmnt` (mounted image content scan)
 
 You can override scan roots with `scanpath=...` entries in `/data/shadowmount/config.ini`.
@@ -193,7 +205,7 @@ checks:
 
 Add one source per line:
 - Path to a game folder, where `sce_sys/param.json` exists inside that folder.
-- Path to a supported image file: `.ffpkg`, `.exfat`, or `.ffpfs`.
+- Path to a supported image file: `.ffpkg`, `.exfat`, `.ffpfs`, or `.ffpfsc`.
 - Empty lines and lines starting with `#` are ignored.
 
 Example:
@@ -327,7 +339,7 @@ If a game is not mounted:
 - Check `/data/shadowmount/debug.log` and system notifications from ShadowMount+.
 - Verify scan roots:
   - if `scanpath=...` is set, only these paths are scanned;
-  - `/mnt/shadowmnt` is always scanned.
+  - `/mnt/shadowmnt/pfsc` and `/mnt/shadowmnt` are always scanned.
 - Verify scan depth:
   - `scan_depth=1` scans only first-level subfolders;
   - `scan_depth=2` scans one additional nested level;
@@ -335,9 +347,10 @@ If a game is not mounted:
 - If logs show `source not stable yet`, adjust `stability_wait_seconds` (or wait for source copy/write to finish).
 - Verify game structure:
   - folder game: `<GAME_DIR>/sce_sys/param.json`;
-  - image game (`.ffpkg` / `.exfat` / `.ffpfs`): `sce_sys/param.json` must be at image root (no extra top-level folder).
+  - image game (`.ffpkg` / `.exfat` / `.ffpfs`): `sce_sys/param.json` must be at image root (no extra top-level folder);
+  - PFSC container (`.ffpfsc`): nested supported image files are scanned; direct game files inside the container are ignored.
 - If you see `missing/invalid param.json` for an image, check via FTP that files are present under `/mnt/shadowmnt/<image_name>_<hash>/` and include `sce_sys/param.json`.
-- If you see image mount failure, check image integrity and filesystem type (`.ffpkg`=UFS, `.exfat`=exFAT, `.ffpfs`=PFS).
+- If you see image mount failure, check image integrity and filesystem type (`.ffpkg`=UFS, `.exfat`=exFAT, `.ffpfs`=PFS, `.ffpfsc`=PFS container).
 - If you see duplicate titleId notification, keep only one source per `<TITLE_ID>`.
 
 If a game is mounted but does not start:

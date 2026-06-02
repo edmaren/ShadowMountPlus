@@ -156,6 +156,9 @@ static directory_candidate_probe_t probe_directory_candidate(
     directory_candidate_info_t *info_out) {
   struct stat param_st;
 
+  if (is_pfsc_image_mount_base_or_child(full_path))
+    return DIRECTORY_CANDIDATE_DESCEND;
+
   if (!allow_known_param_root &&
       is_under_discovered_param_root(full_path, discovered_param_roots,
                                      *discovered_param_root_count)) {
@@ -433,6 +436,13 @@ typedef struct {
   bool *unstable_found_out;
 } collect_candidates_walk_ctx_t;
 
+static void collect_scan_candidates_from_manual_root(
+    const char *scan_path, const char *manual_source_path,
+    scan_candidate_t *candidates, int max_candidates, int *candidate_count,
+    const scan_app_db_context_t *app_db,
+    char discovered_param_roots[][MAX_PATH], int *discovered_param_root_count,
+    bool *unstable_found_out);
+
 static sm_scan_tree_dir_visit_t collect_candidate_directory_visit(
     const char *dir_path, unsigned int depth_from_root, void *ctx_ptr) {
   if (depth_from_root == 0u)
@@ -457,7 +467,18 @@ static bool collect_candidate_image_visit(const char *image_path,
   (void)depth_from_root;
 
   collect_candidates_walk_ctx_t *ctx = (collect_candidates_walk_ctx_t *)ctx_ptr;
-  maybe_mount_image_file(image_path, image_name, ctx->unstable_found_out);
+  if (!maybe_mount_image_file(image_path, image_name, ctx->unstable_found_out))
+    return true;
+
+  if (ctx->manual_source_path && is_pfsc_image_mount_base_or_child(image_path)) {
+    char mount_point[MAX_PATH];
+    get_image_mount_point_for_source(image_path, mount_point);
+    collect_scan_candidates_from_manual_root(
+        mount_point, ctx->manual_source_path, ctx->candidates,
+        ctx->max_candidates, ctx->candidate_count, ctx->app_db,
+        ctx->discovered_param_roots, ctx->discovered_param_root_count,
+        ctx->unstable_found_out);
+  }
   return true;
 }
 
@@ -470,8 +491,9 @@ static void collect_scan_candidates_from_manual_root(
   if (should_stop_requested() || runtime_sleep_mode_active())
     return;
 
-  bool try_root_candidate = true;
-  if (is_under_image_mount_base(scan_path)) {
+  bool pfsc_container_root = is_pfsc_image_mount_base_or_child(scan_path);
+  bool try_root_candidate = !pfsc_container_root;
+  if (try_root_candidate && is_under_image_mount_base(scan_path)) {
     struct stat param_st;
     try_root_candidate = directory_has_param_json(scan_path, &param_st);
   }
@@ -485,9 +507,7 @@ static void collect_scan_candidates_from_manual_root(
     }
   }
 
-  unsigned int scan_depth = runtime_config()->scan_depth;
-  if (scan_depth < MIN_SCAN_DEPTH)
-    scan_depth = MIN_SCAN_DEPTH;
+  unsigned int scan_depth = get_scan_depth_for_root(scan_path);
 
   collect_candidates_walk_ctx_t ctx = {
       .candidates = candidates,
@@ -501,7 +521,8 @@ static void collect_scan_candidates_from_manual_root(
   };
   sm_scan_tree_callbacks_t callbacks = {
       .on_directory = collect_candidate_directory_visit,
-      .on_image_file = NULL,
+      .on_image_file = pfsc_container_root ? collect_candidate_image_visit
+                                           : NULL,
   };
   (void)sm_scan_tree_walk(scan_path, scan_path, 0u, scan_depth, &callbacks, &ctx);
 }
@@ -523,7 +544,8 @@ static void collect_scan_candidates_from_manual_path(
   clear_manual_missing_source(manual_path);
 
   const char *name = get_filename_component(manual_path);
-  if (S_ISREG(st.st_mode) && is_supported_image_file_name(name)) {
+  if (S_ISREG(st.st_mode) &&
+      is_supported_image_file_path(manual_path, name)) {
     if (!maybe_mount_image_file(manual_path, name, unstable_found_out))
       return;
 
@@ -726,9 +748,7 @@ static void collect_scan_candidates_from_root(
   if (should_stop_requested() || runtime_sleep_mode_active())
     return;
 
-  unsigned int scan_depth = runtime_config()->scan_depth;
-  if (scan_depth < MIN_SCAN_DEPTH)
-    scan_depth = MIN_SCAN_DEPTH;
+  unsigned int scan_depth = get_scan_depth_for_root(scan_path);
 
   collect_candidates_walk_ctx_t ctx = {
       .candidates = candidates,

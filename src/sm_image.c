@@ -14,12 +14,45 @@
 #include "sm_path_utils.h"
 #include "sm_paths.h"
 
+static bool image_fs_type_is_pfs(image_fs_type_t fs_type) {
+  return fs_type == IMAGE_FS_PFS || fs_type == IMAGE_FS_PFSC_CONTAINER;
+}
+
+static bool pfs_path_is_nested_inner(const char *path, image_fs_type_t fs_type) {
+  return fs_type == IMAGE_FS_PFS && is_pfsc_image_mount_base_or_child(path);
+}
+
+static bool pfs_path_uses_nested_profile(const char *path,
+                                         image_fs_type_t fs_type) {
+  return fs_type == IMAGE_FS_PFSC_CONTAINER ||
+         pfs_path_is_nested_inner(path, fs_type);
+}
+
+static uint8_t get_nested_pfs_img_type(const char *path,
+                                       image_fs_type_t fs_type) {
+  if (pfs_path_is_nested_inner(path, fs_type))
+    return PFS_NESTED_INNER_IMG_TYPE;
+  return PFS_NESTED_OUTER_IMG_TYPE;
+}
+
+static uint16_t pfs_lvd_game_image_type_from_selector(uint8_t selector) {
+  static const uint16_t table[8] = {1, 2, 3, 4, 8, 9, 10, 11};
+  uint32_t idx = (((uint32_t)selector >> 7) & 1u) +
+                 2u * ((uint32_t)selector & 0x1Fu);
+
+  idx ^= 1u;
+  if (idx >= 8u)
+    return LVD_ATTACH_IMAGE_TYPE_PFS_SAVE_DATA;
+  return table[idx];
+}
+
 static uint32_t get_lvd_sector_size_fallback(image_fs_type_t fs_type) {
   const runtime_config_t *cfg = runtime_config();
   switch (fs_type) {
   case IMAGE_FS_UFS:
     return cfg->lvd_sector_ufs;
   case IMAGE_FS_PFS:
+  case IMAGE_FS_PFSC_CONTAINER:
     return cfg->lvd_sector_pfs;
   case IMAGE_FS_EXFAT:
   default:
@@ -39,8 +72,15 @@ static uint32_t get_image_sector_size_override_or_default(
 }
 
 static uint32_t get_lvd_sector_size(const char *path, image_fs_type_t fs_type) {
+  bool nested_pfs_profile = pfs_path_uses_nested_profile(path, fs_type);
+  uint32_t default_sector =
+      nested_pfs_profile ? LVD_SECTOR_SIZE_PFS
+                         : get_lvd_sector_size_fallback(fs_type);
   uint32_t fallback = get_image_sector_size_override_or_default(
-      path, get_lvd_sector_size_fallback(fs_type));
+      path, default_sector);
+  if (nested_pfs_profile)
+    return fallback;
+
   struct statfs sfs;
   if (statfs(path, &sfs) != 0)
     return fallback;
@@ -91,7 +131,7 @@ static unsigned int get_md_attach_options(bool mount_read_only) {
 
 static uint16_t get_lvd_attach_raw_flags(image_fs_type_t fs_type,
                                          bool mount_read_only) {
-    if (fs_type == IMAGE_FS_UFS) {
+  if (fs_type == IMAGE_FS_UFS) {
     return mount_read_only ? LVD_ATTACH_RAW_FLAGS_DD_RO
                            : LVD_ATTACH_RAW_FLAGS_DD_RW;
   }
@@ -123,10 +163,14 @@ static uint16_t normalize_lvd_raw_flags(uint16_t raw_flags) {
   return (uint16_t)(8u * ((uint32_t)raw_flags & 1u) + 4u);
 }
 
-static uint16_t get_lvd_image_type(image_fs_type_t fs_type) {
+static uint16_t get_lvd_image_type(const char *path, image_fs_type_t fs_type) {
   if (fs_type == IMAGE_FS_UFS)
     return LVD_ATTACH_IMAGE_TYPE_UFS_DOWNLOAD_DATA;
-  if (fs_type == IMAGE_FS_PFS)
+  if (pfs_path_uses_nested_profile(path, fs_type)) {
+    return pfs_lvd_game_image_type_from_selector(
+        get_nested_pfs_img_type(path, fs_type));
+  }
+  if (image_fs_type_is_pfs(fs_type))
     return LVD_ATTACH_IMAGE_TYPE_PFS_SAVE_DATA;
   return LVD_ATTACH_IMAGE_TYPE_SINGLE;
 }
@@ -145,6 +189,9 @@ static uint16_t get_lvd_source_type(const char *path) {
 
 // --- Image Path and Naming Helpers ---
 static image_fs_type_t detect_image_fs_type(const char *name) {
+  if (!name || name[0] == '\0')
+    return IMAGE_FS_UNKNOWN;
+
   const char *dot = strrchr(name, '.');
   if (!dot)
     return IMAGE_FS_UNKNOWN;
@@ -154,11 +201,39 @@ static image_fs_type_t detect_image_fs_type(const char *name) {
     return IMAGE_FS_EXFAT;
   if (strcasecmp(dot, ".ffpfs") == 0)
     return IMAGE_FS_PFS;
+  if (strcasecmp(dot, ".ffpfsc") == 0)
+    return IMAGE_FS_PFSC_CONTAINER;
+  return IMAGE_FS_UNKNOWN;
+}
+
+static bool is_nested_pfs_image_file_name(const char *name) {
+  return name && strcasecmp(name, "pfs_image.dat") == 0;
+}
+
+static image_fs_type_t detect_image_fs_type_for_path(const char *path,
+                                                     const char *name) {
+  const char *filename = name;
+  if ((!filename || filename[0] == '\0') && path)
+    filename = get_filename_component(path);
+
+  image_fs_type_t fs_type = detect_image_fs_type(filename);
+  if (fs_type != IMAGE_FS_UNKNOWN)
+    return fs_type;
+
+  if (is_nested_pfs_image_file_name(filename) &&
+      is_pfsc_image_mount_base_or_child(path)) {
+    return IMAGE_FS_PFS;
+  }
+
   return IMAGE_FS_UNKNOWN;
 }
 
 bool is_supported_image_file_name(const char *name) {
   return detect_image_fs_type(name) != IMAGE_FS_UNKNOWN;
+}
+
+bool is_supported_image_file_path(const char *full_path, const char *name) {
+  return detect_image_fs_type_for_path(full_path, name) != IMAGE_FS_UNKNOWN;
 }
 
 static const char *image_fs_name(image_fs_type_t fs_type) {
@@ -169,6 +244,8 @@ static const char *image_fs_name(image_fs_type_t fs_type) {
     return "exfatfs";
   case IMAGE_FS_PFS:
     return "pfs";
+  case IMAGE_FS_PFSC_CONTAINER:
+    return "pfsc";
   default:
     return "unknown";
   }
@@ -220,8 +297,9 @@ static void strip_extension(const char *filename, char *out, size_t out_size) {
   out[len] = '\0';
 }
 
-static void build_image_mount_point(const char *file_path,
-                                    char mount_point[MAX_PATH]) {
+static void build_image_mount_point_for_fs(const char *file_path,
+                                           image_fs_type_t fs_type,
+                                           char mount_point[MAX_PATH]) {
   const char *filename = get_filename_component(file_path);
   char base_name[MAX_PATH];
   char mount_name[MAX_PATH];
@@ -236,7 +314,16 @@ static void build_image_mount_point(const char *file_path,
   snprintf(mount_name + base_len, sizeof(mount_name) - base_len, "_%08x",
            sm_fnv1a32(file_path));
 
-  snprintf(mount_point, MAX_PATH, "%s/%s", IMAGE_MOUNT_BASE, mount_name);
+  const char *mount_base =
+      fs_type == IMAGE_FS_PFSC_CONTAINER ? PFSC_IMAGE_MOUNT_BASE
+                                         : IMAGE_MOUNT_BASE;
+  snprintf(mount_point, MAX_PATH, "%s/%s", mount_base, mount_name);
+}
+
+static void build_image_mount_point(const char *file_path,
+                                    char mount_point[MAX_PATH]) {
+  build_image_mount_point_for_fs(
+      file_path, detect_image_fs_type_for_path(file_path, NULL), mount_point);
 }
 
 void get_image_mount_point_for_source(const char *file_path,
@@ -315,6 +402,35 @@ static bool attach_lvd_backend(const char *file_path, image_fs_type_t fs_type,
                                bool mount_read_only, off_t file_size,
                                int *unit_id_out, char *devname_out,
                                size_t devname_size) {
+/*  if (pfs_path_is_nested_inner(file_path, fs_type)) {
+    struct stat req;
+    memset(&req, 0, sizeof(req));
+    req.st_dev = 1;
+    req.st_mode = 0;
+    req.st_gid = 1;
+    req.st_atim.tv_sec = 0;
+
+    int cache_fd = open(file_path, O_RDONLY);
+    if (cache_fd < 0) {
+      log_debug("  [IMG][%s] GDDR5 cache open failed for %s: %s",
+                attach_backend_name(ATTACH_BACKEND_LVD), file_path,
+                strerror(errno));
+      return false;
+    }
+    int cache_ret = ioctl(cache_fd, PFS_GDDR5_CACHE_IOCTL, &req);
+    int cache_errno = cache_ret != 0 ? errno : 0;
+    close(cache_fd);
+    if (cache_ret != 0) {
+      errno = cache_errno;
+      log_debug("  [IMG][%s] GDDR5 cache ioctl failed for %s: %s",
+                attach_backend_name(ATTACH_BACKEND_LVD), file_path,
+                strerror(errno));
+      return false;
+    }
+    log_debug("  [IMG][%s] GDDR5 cache enabled for nested PFS: %s",
+              attach_backend_name(ATTACH_BACKEND_LVD), file_path);
+  }
+*/
   int lvd_fd = open(LVD_CTRL_PATH, O_RDWR);
   if (lvd_fd < 0) {
     log_debug("  [IMG][%s] open %s failed: %s",
@@ -339,7 +455,7 @@ static bool attach_lvd_backend(const char *file_path, image_fs_type_t fs_type,
   lvd_ioctl_attach_v0_t req;
   memset(&req, 0, sizeof(req));
   req.io_version = LVD_ATTACH_IO_VERSION_V0;
-  req.image_type = get_lvd_image_type(fs_type);
+  req.image_type = get_lvd_image_type(file_path, fs_type);
   req.layer_count = LVD_ATTACH_LAYER_COUNT;
   req.device_size = (uint64_t)file_size;
   req.layers_ptr = layers;
@@ -573,6 +689,8 @@ static bool stat_image_file(const char *file_path, struct stat *st_out) {
 
 static void ensure_mount_dirs(const char *mount_point) {
   mkdir(IMAGE_MOUNT_BASE, 0777);
+  if (is_pfsc_image_mount_base_or_child(mount_point))
+    mkdir(PFSC_IMAGE_MOUNT_BASE, 0777);
   mkdir(mount_point, 0777);
 }
 
@@ -617,7 +735,20 @@ static bool perform_image_nmount(const char *file_path, image_fs_type_t fs_type,
   const char *sigverify = PFS_MOUNT_SIGVERIFY ? "1" : "0";
   const char *playgo = PFS_MOUNT_PLAYGO ? "1" : "0";
   const char *disc = PFS_MOUNT_DISC ? "1" : "0";
+  const char *finalized = "0";
+  const char *pubkey_ver = "0";
+  const char *key_ver = "0";
   const char *ekpfs_key = PFS_ZERO_EKPFS_KEY_HEX;
+  uint8_t nested_img_type = 0;
+  bool nested_pfs_profile = pfs_path_uses_nested_profile(file_path, fs_type);
+  if (nested_pfs_profile) {
+    nested_img_type = get_nested_pfs_img_type(file_path, fs_type);
+    // Temporarily disabled: keep nested PFS signature option wired but do not
+    // force sigverify=1.
+    // sigverify = "1";
+    disc = (nested_img_type & 0x40u) ? "1" : "0";
+    finalized = (nested_img_type & 0x20u) ? "1" : "0";
+  }
 
   struct iovec iov_ufs[] = {
       IOVEC_ENTRY("fstype"),     IOVEC_ENTRY("ufs"), 
@@ -661,19 +792,55 @@ static bool perform_image_nmount(const char *file_path, image_fs_type_t fs_type,
       IOVEC_ENTRY("errmsg"),     {(void *)mount_errmsg, sizeof(mount_errmsg)},
       IOVEC_ENTRY("force"),      IOVEC_ENTRY(NULL)};
 
+  struct iovec iov_nested_pfs[] = {
+      IOVEC_ENTRY("from"),       IOVEC_ENTRY(devname),
+      IOVEC_ENTRY("fspath"),     IOVEC_ENTRY(mount_point),
+      IOVEC_ENTRY("fstype"),     IOVEC_ENTRY("pfs"),
+      IOVEC_ENTRY("sigverify"),  IOVEC_ENTRY(sigverify),
+      IOVEC_ENTRY("mkeymode"),   IOVEC_ENTRY(PFS_MOUNT_MKEYMODE),
+      IOVEC_ENTRY("budgetid"),   IOVEC_ENTRY(PFS_MOUNT_BUDGET_ID),
+      IOVEC_ENTRY("playgo"),     IOVEC_ENTRY(playgo),
+      IOVEC_ENTRY("disc"),       IOVEC_ENTRY(disc),
+//      IOVEC_ENTRY("pubkey_ver"), IOVEC_ENTRY(pubkey_ver),
+//      IOVEC_ENTRY("key_ver"),    IOVEC_ENTRY(key_ver),
+//      IOVEC_ENTRY("finalized"),  IOVEC_ENTRY(finalized),
+      IOVEC_ENTRY("async"),      IOVEC_ENTRY(NULL),
+      IOVEC_ENTRY("noatime"),    IOVEC_ENTRY(NULL),
+      IOVEC_ENTRY("automounted"), IOVEC_ENTRY(NULL),
+      IOVEC_ENTRY("errmsg"),     {(void *)mount_errmsg, sizeof(mount_errmsg)},
+      IOVEC_ENTRY("force"),      IOVEC_ENTRY(NULL)};
+
   if (fs_type == IMAGE_FS_UFS) {
     iov = iov_ufs;
     iovlen = (unsigned int)IOVEC_SIZE(iov_ufs) - (force_mount ? 0u : 2u);
   } else if (fs_type == IMAGE_FS_EXFAT) {
     iov = iov_exfat;
     iovlen = (unsigned int)IOVEC_SIZE(iov_exfat) - (force_mount ? 0u : 2u);
-  } else if (fs_type == IMAGE_FS_PFS) {
-    log_debug("  [IMG][%s] PFS ro=%d budgetid=%s mkeymode=%s "
-              "sigverify=%s playgo=%s disc=%s ekpfs=zero",
-              attach_backend_name(attach_backend), mount_read_only ? 1 : 0,
-              PFS_MOUNT_BUDGET_ID, PFS_MOUNT_MKEYMODE, sigverify, playgo, disc);
-    iov = iov_pfs;
-    iovlen = (unsigned int)IOVEC_SIZE(iov_pfs) - (force_mount ? 0u : 2u);
+  } else if (image_fs_type_is_pfs(fs_type)) {
+    if (nested_pfs_profile) {
+      log_debug("  [IMG][%s] PFS ro=%d budgetid=%s mkeymode=%s "
+                "sigverify=%s playgo=%s disc=%s finalized=%s "
+                "pubkey_ver=%s key_ver=%s",
+                attach_backend_name(attach_backend), mount_read_only ? 1 : 0,
+                PFS_MOUNT_BUDGET_ID, PFS_MOUNT_MKEYMODE, sigverify, playgo,
+                disc, finalized, pubkey_ver, key_ver);
+      log_debug("  [IMG][%s] nested PFS profile: selector=0x%02x "
+                "lvd_img=%u gddr5=%d",
+                attach_backend_name(attach_backend), nested_img_type,
+                get_lvd_image_type(file_path, fs_type),
+                pfs_path_is_nested_inner(file_path, fs_type) ? 1 : 0);
+      iov = iov_nested_pfs;
+      iovlen =
+          (unsigned int)IOVEC_SIZE(iov_nested_pfs) - (force_mount ? 0u : 2u);
+    } else {
+      log_debug("  [IMG][%s] PFS ro=%d budgetid=%s mkeymode=%s "
+                "sigverify=%s playgo=%s disc=%s ekpfs=zero",
+                attach_backend_name(attach_backend), mount_read_only ? 1 : 0,
+                PFS_MOUNT_BUDGET_ID, PFS_MOUNT_MKEYMODE, sigverify, playgo,
+                disc);
+      iov = iov_pfs;
+      iovlen = (unsigned int)IOVEC_SIZE(iov_pfs) - (force_mount ? 0u : 2u);
+    }
   } else {
     log_debug("  [IMG][%s] unsupported fstype=%s",
               attach_backend_name(attach_backend), image_fs_name(fs_type));
@@ -771,12 +938,14 @@ bool mount_image(const char *file_path, image_fs_type_t fs_type) {
   if (filename[0] != '\0')
     mount_mode_overridden =
         get_image_mode_override(filename, &mount_read_only);
+  if (pfs_path_uses_nested_profile(file_path, fs_type))
+    mount_read_only = true;
 
   if (runtime_sleep_mode_active())
     return false;
 
   char mount_point[MAX_PATH];
-  build_image_mount_point(file_path, mount_point);
+  build_image_mount_point_for_fs(file_path, fs_type, mount_point);
 
   bool handled = false;
   bool success = false;
@@ -869,9 +1038,36 @@ bool mount_image(const char *file_path, image_fs_type_t fs_type) {
   return true;
 }
 
+static bool unmount_child_image_mounts_for_container(const char *mount_point) {
+  bool all_unmounted = true;
+
+  for (int k = 0; k < MAX_IMAGE_MOUNTS; k++) {
+    image_cache_entry_t cached_entry;
+    if (!get_image_cache_entry(k, &cached_entry))
+      continue;
+    if (!path_matches_root_or_child(cached_entry.path, mount_point))
+      continue;
+
+    log_debug("  [IMG] container child unmount: %s source=%s",
+              mount_point, cached_entry.path);
+    if (unmount_image(cached_entry.path, cached_entry.unit_id,
+                      cached_entry.backend)) {
+      invalidate_image_cache_entry(k);
+      continue;
+    }
+
+    all_unmounted = false;
+    log_debug("  [IMG] container child unmount pending: %s source=%s",
+              mount_point, cached_entry.path);
+  }
+
+  return all_unmounted;
+}
+
 bool unmount_image(const char *file_path, int unit_id, attach_backend_t backend) {
   char mount_point[MAX_PATH];
-  build_image_mount_point(file_path, mount_point);
+  image_fs_type_t fs_type = detect_image_fs_type_for_path(file_path, NULL);
+  build_image_mount_point_for_fs(file_path, fs_type, mount_point);
   int resolved_unit = unit_id;
   attach_backend_t resolved_backend = backend;
 
@@ -886,6 +1082,11 @@ bool unmount_image(const char *file_path, int unit_id, attach_backend_t backend)
   log_debug("  [IMG][%s] unmount start: source=%s mount=%s unit=%d",
             attach_backend_name(resolved_backend), file_path, mount_point,
             resolved_unit);
+
+  if (fs_type == IMAGE_FS_PFSC_CONTAINER &&
+      !unmount_child_image_mounts_for_container(mount_point)) {
+    return false;
+  }
 
   // Remove mount.lnk and unmount /system_ex/app/<titleid> that point to this
   // source before unmounting the virtual disk itself.
@@ -975,7 +1176,8 @@ void cleanup_stale_image_mounts(void) {
       continue;
     }
 
-    image_fs_type_t fs_type = detect_image_fs_type(cached_entry.path);
+    image_fs_type_t fs_type =
+        detect_image_fs_type_for_path(cached_entry.path, NULL);
     char mount_point[MAX_PATH];
     char source_path[MAX_PATH];
     if (!prepare_image_mount_retry(&cached_entry, mount_point, source_path))
@@ -1024,7 +1226,8 @@ void cleanup_stale_image_mounts_for_root(const char *root) {
       continue;
     }
 
-    image_fs_type_t fs_type = detect_image_fs_type(cached_entry.path);
+    image_fs_type_t fs_type =
+        detect_image_fs_type_for_path(cached_entry.path, NULL);
     char mount_point[MAX_PATH];
     char source_path[MAX_PATH];
     if (!prepare_image_mount_retry(&cached_entry, mount_point, source_path))
@@ -1071,11 +1274,11 @@ bool unmount_usb_image_mounts_for_suspend(void) {
   return all_unmounted;
 }
 
-void cleanup_mount_dirs(void) {
-  DIR *d = opendir(IMAGE_MOUNT_BASE);
+static void cleanup_mount_dirs_under(const char *base, const char *skip_name) {
+  DIR *d = opendir(base);
   if (!d) {
     if (errno != ENOENT)
-      log_debug("  [IMG] open %s failed: %s", IMAGE_MOUNT_BASE, strerror(errno));
+      log_debug("  [IMG] open %s failed: %s", base, strerror(errno));
     return;
   }
 
@@ -1085,10 +1288,11 @@ void cleanup_mount_dirs(void) {
       break;
     if (entry->d_name[0] == '.')
       continue;
+    if (skip_name && strcmp(entry->d_name, skip_name) == 0)
+      continue;
 
     char full_path[MAX_PATH];
-    snprintf(full_path, sizeof(full_path), "%s/%s", IMAGE_MOUNT_BASE,
-             entry->d_name);
+    snprintf(full_path, sizeof(full_path), "%s/%s", base, entry->d_name);
 
     bool is_dir = false;
     if (entry->d_type == DT_DIR) {
@@ -1114,9 +1318,15 @@ void cleanup_mount_dirs(void) {
   closedir(d);
 }
 
+void cleanup_mount_dirs(void) {
+  cleanup_mount_dirs_under(PFSC_IMAGE_MOUNT_BASE, NULL);
+  cleanup_mount_dirs_under(IMAGE_MOUNT_BASE, "pfsc");
+}
+
 bool maybe_mount_image_file(const char *full_path, const char *display_name,
                             bool *unstable_out) {
-  image_fs_type_t fs_type = detect_image_fs_type(display_name);
+  image_fs_type_t fs_type =
+      detect_image_fs_type_for_path(full_path, display_name);
   if (fs_type == IMAGE_FS_UNKNOWN)
     return false;
   if (!is_source_stable_for_mount(full_path, display_name, "IMG")) {

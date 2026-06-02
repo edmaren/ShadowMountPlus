@@ -18,6 +18,8 @@ const runtime_config_t *runtime_config(void);
 int get_scan_path_count(void);
 // Return a scan root by index, or NULL if out of range.
 const char *get_scan_path(int index);
+// Return scan depth for a root, including managed container-root expansion.
+uint32_t get_scan_depth_for_root(const char *scan_path);
 // Resolve a per-image read-only override from the file name.
 bool get_image_mode_override(const char *filename, bool *mount_read_only_out);
 // Resolve a per-image sector-size override from autotune.ini or config.ini.

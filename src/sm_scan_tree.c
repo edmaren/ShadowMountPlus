@@ -71,11 +71,14 @@ bool sm_scan_tree_walk(const char *scan_root, const char *dir_path,
   if (!d)
     return true;
 
+  bool scan_root_is_pfsc_mount_base =
+      is_pfsc_image_mount_base_or_child(scan_root);
   bool skip_backports_root =
       (depth_from_root == 0u && !is_under_image_mount_base(scan_root));
   bool allow_image_file_visits =
       callbacks->on_image_file &&
-      !path_matches_root_or_child(scan_root, IMAGE_MOUNT_BASE);
+      (!path_matches_root_or_child(scan_root, IMAGE_MOUNT_BASE) ||
+       scan_root_is_pfsc_mount_base);
 
   struct dirent *entry;
   while ((entry = readdir(d)) != NULL) {
@@ -98,7 +101,7 @@ bool sm_scan_tree_walk(const char *scan_root, const char *dir_path,
     classify_scan_tree_entry(full_path, entry->d_type, &is_dir, &is_regular);
 
     if (allow_image_file_visits && is_regular &&
-        is_supported_image_file_name(entry->d_name)) {
+        is_supported_image_file_path(full_path, entry->d_name)) {
       if (!callbacks->on_image_file(full_path, entry->d_name, depth_from_root + 1u,
                                     ctx)) {
         closedir(d);

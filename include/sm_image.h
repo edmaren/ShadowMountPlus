@@ -29,5 +29,7 @@ void get_image_mount_point_for_source(const char *file_path,
                                       char mount_point[MAX_PATH]);
 // Return true when the filename has a supported image extension.
 bool is_supported_image_file_name(const char *name);
+// Return true when the source path is a supported image, including nested names.
+bool is_supported_image_file_path(const char *full_path, const char *name);
 
 #endif
