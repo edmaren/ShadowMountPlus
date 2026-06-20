@@ -91,6 +91,10 @@ static uint64_t scanner_full_resync_interval_us(void) {
   return (uint64_t)runtime_config()->scan_interval_us;
 }
 
+static bool scanner_full_resync_disabled(void) {
+  return runtime_config()->scan_interval_us == 0;
+}
+
 static void schedule_config_reload(uint64_t now_us) {
   g_scanner_config_reload_pending = true;
   g_scanner_config_reload_ready_after_us =
@@ -1378,8 +1382,9 @@ void sm_scanner_run_loop(void) {
     return;
   }
 
-  uint64_t next_full_resync_us =
-      monotonic_time_us() + scanner_full_resync_interval_us();
+  uint64_t next_full_resync_us = scanner_full_resync_disabled()
+      ? 0
+      : monotonic_time_us() + scanner_full_resync_interval_us();
   bool was_sleeping = false;
 
   while (true) {
@@ -1434,17 +1439,24 @@ void sm_scanner_run_loop(void) {
       }
 
       uint64_t now_us = monotonic_time_us();
-      next_full_resync_us = now_us + scanner_full_resync_interval_us();
-      if (unstable_found) {
-        uint64_t retry_due = now_us + scanner_stability_wait_us();
-        if (retry_due < next_full_resync_us)
-          next_full_resync_us = retry_due;
+      if (scanner_full_resync_disabled()) {
+        next_full_resync_us =
+            unstable_found ? now_us + scanner_stability_wait_us() : 0;
+      } else {
+        next_full_resync_us = now_us + scanner_full_resync_interval_us();
+        if (unstable_found) {
+          uint64_t retry_due = now_us + scanner_stability_wait_us();
+          if (retry_due < next_full_resync_us)
+            next_full_resync_us = retry_due;
+        }
       }
       continue;
     }
 
     uint64_t now_us = monotonic_time_us();
-    if (sm_game_lifecycle_has_active_game()) {
+    if (scanner_full_resync_disabled()) {
+      next_full_resync_us = 0;
+    } else if (sm_game_lifecycle_has_active_game()) {
       next_full_resync_us = 0;
     } else if (next_full_resync_us == 0) {
       next_full_resync_us = now_us;
@@ -1496,9 +1508,11 @@ void sm_scanner_run_loop(void) {
         notify_system("ShadowMount+: config reloaded.");
         log_debug("  [CFG] runtime config reloaded");
         now_us = monotonic_time_us();
-        next_full_resync_us =
-            scan_topology_changed ? now_us
-                                  : now_us + scanner_full_resync_interval_us();
+        next_full_resync_us = scan_topology_changed
+            ? now_us
+            : (scanner_full_resync_disabled()
+                   ? 0
+                   : now_us + scanner_full_resync_interval_us());
       }
       continue;
     }
@@ -1524,11 +1538,16 @@ void sm_scanner_run_loop(void) {
       }
 
       now_us = monotonic_time_us();
-      next_full_resync_us = now_us + scanner_full_resync_interval_us();
-      if (unstable_found) {
-        uint64_t retry_due = now_us + scanner_stability_wait_us();
-        if (retry_due < next_full_resync_us)
-          next_full_resync_us = retry_due;
+      if (scanner_full_resync_disabled()) {
+        next_full_resync_us =
+            unstable_found ? now_us + scanner_stability_wait_us() : 0;
+      } else {
+        next_full_resync_us = now_us + scanner_full_resync_interval_us();
+        if (unstable_found) {
+          uint64_t retry_due = now_us + scanner_stability_wait_us();
+          if (retry_due < next_full_resync_us)
+            next_full_resync_us = retry_due;
+        }
       }
       continue;
     }
@@ -1556,11 +1575,16 @@ void sm_scanner_run_loop(void) {
       }
 
       now_us = monotonic_time_us();
-      next_full_resync_us = now_us + scanner_full_resync_interval_us();
-      if (unstable_found) {
-        uint64_t retry_due = now_us + scanner_stability_wait_us();
-        if (retry_due < next_full_resync_us)
-          next_full_resync_us = retry_due;
+      if (scanner_full_resync_disabled()) {
+        next_full_resync_us =
+            unstable_found ? now_us + scanner_stability_wait_us() : 0;
+      } else {
+        next_full_resync_us = now_us + scanner_full_resync_interval_us();
+        if (unstable_found) {
+          uint64_t retry_due = now_us + scanner_stability_wait_us();
+          if (retry_due < next_full_resync_us)
+            next_full_resync_us = retry_due;
+        }
       }
       continue;
     }
