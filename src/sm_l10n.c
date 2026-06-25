@@ -1,6 +1,8 @@
 #include "sm_l10n.h"
 
 #include "sm_config_mount.h"
+
+extern int sceSystemServiceParamGetInt(int paramId, int *value);
 #include "sm_log.h"
 #include "sm_types.h"
 
