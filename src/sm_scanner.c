@@ -1503,8 +1503,7 @@ void sm_scanner_run_loop(void) {
           request_scanner_shutdown("scanner stale event drain after config reload failed");
           return;
         }
-        sm_l10n_init();
-        notify_system_l10n(SM_L10N_CONFIG_RELOADED);
+        notify_system("ShadowMount+: config reloaded.");
         log_debug("  [CFG] runtime config reloaded");
         now_us = monotonic_time_us();
         next_full_resync_us = scan_topology_changed
