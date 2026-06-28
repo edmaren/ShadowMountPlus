@@ -1381,7 +1381,7 @@ void sm_scanner_run_loop(void) {
   }
 
   uint64_t next_full_resync_us = scanner_full_resync_disabled()
-      ? 0
+      ? monotonic_time_us()
       : monotonic_time_us() + scanner_full_resync_interval_us();
   bool was_sleeping = false;
 
@@ -1440,6 +1440,8 @@ void sm_scanner_run_loop(void) {
       if (scanner_full_resync_disabled()) {
         next_full_resync_us =
             unstable_found ? now_us + scanner_stability_wait_us() : 0;
+        if (!unstable_found)
+          clear_scanner_watch_entries();
       } else {
         next_full_resync_us = now_us + scanner_full_resync_interval_us();
         if (unstable_found) {
@@ -1452,8 +1454,8 @@ void sm_scanner_run_loop(void) {
     }
 
     uint64_t now_us = monotonic_time_us();
-    if (scanner_full_resync_disabled()) {
-      next_full_resync_us = 0;
+    if (scanner_full_resync_disabled() && next_full_resync_us == 0) {
+      /* startup scan done: stay dormant */
     } else if (sm_game_lifecycle_has_active_game()) {
       next_full_resync_us = 0;
     } else if (next_full_resync_us == 0) {
@@ -1539,6 +1541,8 @@ void sm_scanner_run_loop(void) {
       if (scanner_full_resync_disabled()) {
         next_full_resync_us =
             unstable_found ? now_us + scanner_stability_wait_us() : 0;
+        if (!unstable_found)
+          clear_scanner_watch_entries();
       } else {
         next_full_resync_us = now_us + scanner_full_resync_interval_us();
         if (unstable_found) {
@@ -1576,6 +1580,8 @@ void sm_scanner_run_loop(void) {
       if (scanner_full_resync_disabled()) {
         next_full_resync_us =
             unstable_found ? now_us + scanner_stability_wait_us() : 0;
+        if (!unstable_found)
+          clear_scanner_watch_entries();
       } else {
         next_full_resync_us = now_us + scanner_full_resync_interval_us();
         if (unstable_found) {
